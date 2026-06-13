@@ -1,4 +1,4 @@
-# dashboard_reunion_communes_map.py
+# dashboard_reunion_complet_fixed.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -6,37 +6,21 @@ import numpy as np
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Dashboard Immobilier La Réunion",
+    page_title="Dashboard Immobilier La Réunion - Tous biens",
     page_icon="🌴",
     layout="wide"
 )
 
-# Dictionnaire des communes AVEC coordonnées WGS84 (centres)
-COMMUNES_COORDS = {
-    "Saint-Denis": {"lat": -20.8823, "lon": 55.4504, "code": "97412"},
-    "Saint-Pierre": {"lat": -21.3419, "lon": 55.4778, "code": "97417"},
-    "Saint-Paul": {"lat": -21.0096, "lon": 55.2696, "code": "97416"},
-    "Saint-Louis": {"lat": -21.2862, "lon": 55.4095, "code": "97415"},
-    "Saint-André": {"lat": -20.9601, "lon": 55.6502, "code": "97410"},
-    "Saint-Benoît": {"lat": -21.0342, "lon": 55.7121, "code": "97411"},
-    "Saint-Joseph": {"lat": -21.3782, "lon": 55.6194, "code": "97413"},
-    "Saint-Leu": {"lat": -21.1674, "lon": 55.2861, "code": "97414"},
-    "Sainte-Marie": {"lat": -20.8969, "lon": 55.5493, "code": "97419"},
-    "Sainte-Suzanne": {"lat": -20.9064, "lon": 55.6075, "code": "97421"},
-    "Sainte-Rose": {"lat": -21.1289, "lon": 55.7933, "code": "97420"},
-    "Le Tampon": {"lat": -21.2800, "lon": 55.5200, "code": "97423"},
-    "Les Avirons": {"lat": -21.2425, "lon": 55.3394, "code": "97401"},
-    "Bras-Panon": {"lat": -20.9953, "lon": 55.6778, "code": "97402"},
-    "Cilaos": {"lat": -21.1347, "lon": 55.4661, "code": "97403"},
-    "Entre-Deux": {"lat": -21.2464, "lon": 55.4706, "code": "97404"},
-    "L'Étang-Salé": {"lat": -21.2633, "lon": 55.3644, "code": "97405"},
-    "Petite-Île": {"lat": -21.3531, "lon": 55.5644, "code": "97406"},
-    "La Plaine-des-Palmistes": {"lat": -21.1356, "lon": 55.6250, "code": "97407"},
-    "Le Port": {"lat": -20.9389, "lon": 55.2903, "code": "97408"},
-    "La Possession": {"lat": -20.9300, "lon": 55.3350, "code": "97409"},
-    "Saint-Philippe": {"lat": -21.3594, "lon": 55.7678, "code": "97418"},
-    "Salazie": {"lat": -21.0275, "lon": 55.5386, "code": "97422"},
-    "Les Trois-Bassins": {"lat": -21.1150, "lon": 55.2900, "code": "97424"},
+# Dictionnaire des communes
+COMMUNES_REUNION = {
+    "97401": "Les Avirons", "97402": "Bras-Panon", "97403": "Cilaos",
+    "97404": "Entre-Deux", "97405": "L'Étang-Salé", "97406": "Petite-Île",
+    "97407": "La Plaine-des-Palmistes", "97408": "Le Port", "97409": "La Possession",
+    "97410": "Saint-André", "97411": "Saint-Benoît", "97412": "Saint-Denis",
+    "97413": "Saint-Joseph", "97414": "Saint-Leu", "97415": "Saint-Louis",
+    "97416": "Saint-Paul", "97417": "Saint-Pierre", "97418": "Saint-Philippe",
+    "97419": "Sainte-Marie", "97420": "Sainte-Rose", "97421": "Sainte-Suzanne",
+    "97422": "Salazie", "97423": "Le Tampon", "97424": "Les Trois-Bassins"
 }
 
 @st.cache_data(ttl=3600)
@@ -51,221 +35,293 @@ def load_data():
         return pd.DataFrame()
 
 def prepare_data(df):
-    """Nettoie les données"""
+    """Nettoie les données en incluant TOUS les types de biens"""
     if df.empty:
         return df
     
     df_clean = df.copy()
     
-    # Dates
+    # Conversion des dates
     df_clean['date_mutation'] = pd.to_datetime(df_clean['datemut'], errors='coerce')
     df_clean['annee'] = df_clean['date_mutation'].dt.year
+    df_clean['mois'] = df_clean['date_mutation'].dt.month
     
     # Valeur foncière
     df_clean['valeur_fonciere'] = pd.to_numeric(df_clean['valeurfonc'], errors='coerce')
     
-    # Surface
+    # Surface bâtie (sbati) - pour les terrains, garder même à 0
     df_clean['surface_reelle_bati'] = pd.to_numeric(df_clean['sbati'], errors='coerce')
     
-    # Type de bien
+    # Pour les terrains sans bâtiment, on utilise une surface par défaut ou on garde 0
+    # On ne filtre PAS les surfaces à 0
+    
+    # Type de bien - garder TOUS les types
     df_clean['type_local'] = df_clean['libtypbien']
     
     # Code commune et nom
     df_clean['code_commune'] = df_clean['l_codinsee'].astype(str).str.zfill(5)
+    df_clean['nom_commune'] = df_clean['code_commune'].map(COMMUNES_REUNION)
     
-    # Associer le nom de commune via notre dictionnaire
-    code_to_name = {v['code']: k for k, v in COMMUNES_COORDS.items()}
-    df_clean['nom_commune'] = df_clean['code_commune'].map(code_to_name)
-    
-    # Ajouter les coordonnées des communes
-    df_clean['latitude'] = df_clean['nom_commune'].map(lambda x: COMMUNES_COORDS.get(x, {}).get('lat') if x else None)
-    df_clean['longitude'] = df_clean['nom_commune'].map(lambda x: COMMUNES_COORDS.get(x, {}).get('lon') if x else None)
+    # Coordonnées
+    df_clean['longitude'] = pd.to_numeric(df_clean['geompar_x'], errors='coerce')
+    df_clean['latitude'] = pd.to_numeric(df_clean['geompar_y'], errors='coerce')
     
     # Code postal
     df_clean['code_postal'] = df_clean['codservch'].astype(str).str[:5]
     
-    # Filtrage
+    # Supprimer les valeurs manquantes critiques (seulement la valeur foncière)
     df_clean = df_clean.dropna(subset=['valeur_fonciere', 'nom_commune'])
-    df_clean = df_clean[df_clean['valeur_fonciere'] > 5000]
-    df_clean = df_clean[df_clean['valeur_fonciere'] < 5000000]
     
-    # Prix au m²
-    mask_surface = (df_clean['surface_reelle_bati'] > 9) & (df_clean['surface_reelle_bati'] < 10000)
+    # Filtrage des valeurs aberrantes (plus souple)
+    df_clean = df_clean[df_clean['valeur_fonciere'] > 5000]   # Min 5k€ (inclut petits terrains)
+    df_clean = df_clean[df_clean['valeur_fonciere'] < 5000000]  # Max 5M€
+    
+    # Pour les biens avec surface > 0, calculer prix m²
+    # Pour les terrains, on ne calcule pas le prix m² (laisser NaN)
+    mask_surface_valide = (df_clean['surface_reelle_bati'] > 9) & (df_clean['surface_reelle_bati'] < 10000)
     df_clean['prix_m2'] = np.nan
-    df_clean.loc[mask_surface, 'prix_m2'] = (
-        df_clean.loc[mask_surface, 'valeur_fonciere'] / 
-        df_clean.loc[mask_surface, 'surface_reelle_bati']
+    df_clean.loc[mask_surface_valide, 'prix_m2'] = (
+        df_clean.loc[mask_surface_valide, 'valeur_fonciere'] / 
+        df_clean.loc[mask_surface_valide, 'surface_reelle_bati']
     )
+    
+    # Filtrer prix m² aberrants (uniquement pour ceux qui ont une surface)
+    if 'prix_m2' in df_clean.columns:
+        mask_prix_valide = (df_clean['prix_m2'] >= 100) & (df_clean['prix_m2'] <= 15000)
+        mask_prix_valide = mask_prix_valide | (df_clean['prix_m2'].isna())
+        df_clean = df_clean[mask_prix_valide]
     
     return df_clean
 
-# Chargement
+# Interface principale
 st.title("🌴 Dashboard Immobilier La Réunion")
-st.markdown("*Source : DVF Plus - Tous types de biens*")
+st.markdown("*Source : DVF Plus - Tous types de biens (maisons, appartements, terrains)*")
 
+# Chargement
 df_raw = load_data()
 if df_raw.empty:
     st.stop()
 
-with st.spinner("Nettoyage des données..."):
+# Afficher les statistiques des types de biens avant nettoyage
+with st.expander("📊 Types de biens dans les données brutes"):
+    types_counts = df_raw['libtypbien'].value_counts()
+    st.dataframe(types_counts.reset_index().head(20))
+
+# Nettoyage
+with st.spinner("🧹 Nettoyage des données..."):
     df = prepare_data(df_raw)
 
 if df.empty:
-    st.error("❌ Aucune transaction valide")
+    st.error("❌ Aucune transaction valide après nettoyage")
+    
+    # Diagnostic détaillé
+    with st.expander("🔍 Diagnostic avancé"):
+        st.write("**Types de biens uniques:**", df_raw['libtypbien'].unique())
+        st.write("**Valeurs foncières - min/max:**", df_raw['valeurfonc'].min(), df_raw['valeurfonc'].max())
+        st.write("**Surfaces (sbati) - distribution:**")
+        st.write(df_raw['sbati'].describe())
+        
+        # Vérifier les valeurs après conversion
+        test_df = df_raw.copy()
+        test_df['valeur_fonciere'] = pd.to_numeric(test_df['valeurfonc'], errors='coerce')
+        test_df = test_df.dropna(subset=['valeur_fonciere', 'l_codinsee'])
+        test_df = test_df[test_df['valeur_fonciere'] > 5000]
+        
+        st.write(f"**Après filtrage basique:** {len(test_df)} transactions")
+        st.write("**Exemple de transactions valides:**")
+        st.dataframe(test_df[['valeurfonc', 'sbati', 'libtypbien', 'l_codinsee']].head(10))
+    
     st.stop()
 
-# Sidebar
+# Succès
+annees_dispo = sorted(df['annee'].dropna().unique())
+types_dispo = df['type_local'].value_counts()
+
+st.success(f"✅ {len(df):,} transactions valides ({min(annees_dispo)} - {max(annees_dispo)})")
+
+# Sidebar - Filtres
 st.sidebar.header("📅 Filtres")
 
-annees_dispo = sorted(df['annee'].dropna().unique())
-selected_annee = st.sidebar.selectbox("Année", ['Toutes'] + [int(a) for a in annees_dispo if pd.notna(a)])
+# Filtre année
+selected_annee = st.sidebar.selectbox(
+    "Année",
+    options=['Toutes'] + [int(a) for a in annees_dispo if a <= 2026],
+    index=0
+)
 
-types_dispo = df['type_local'].value_counts()
-selected_type = st.sidebar.selectbox("Type de bien", ['Tous'] + list(types_dispo.head(10).index))
+# Filtre type de bien
+type_options = ['Tous'] + list(types_dispo.head(10).index)
+selected_type = st.sidebar.selectbox("Type de bien", type_options)
 
+# Filtre prix
 prix_max = int(df['valeur_fonciere'].max())
-prix_range = st.sidebar.slider("Prix (€)", 0, prix_max, (0, prix_max))
+prix_range = st.sidebar.slider(
+    "Prix (€)",
+    min_value=0,
+    max_value=prix_max,
+    value=(0, prix_max)
+)
 
-# Application filtres
+# Application des filtres
 df_filtered = df.copy()
+
 if selected_annee != 'Toutes':
     df_filtered = df_filtered[df_filtered['annee'] == selected_annee]
+
 if selected_type != 'Tous':
     df_filtered = df_filtered[df_filtered['type_local'] == selected_type]
-df_filtered = df_filtered[(df_filtered['valeur_fonciere'] >= prix_range[0]) & (df_filtered['valeur_fonciere'] <= prix_range[1])]
 
-if df_filtered.empty:
-    st.warning("Aucune transaction avec ces filtres")
-    st.stop()
+df_filtered = df_filtered[
+    (df_filtered['valeur_fonciere'] >= prix_range[0]) & 
+    (df_filtered['valeur_fonciere'] <= prix_range[1])
+]
 
-# KPIs
+# Statistiques globales
 st.header("📊 Vue d'ensemble")
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Transactions", f"{len(df_filtered):,}")
-with col2:
-    st.metric("Communes", f"{df_filtered['nom_commune'].nunique()}")
-with col3:
-    st.metric("Prix médian", f"{df_filtered['valeur_fonciere'].median():,.0f} €")
-with col4:
-    prix_m2 = df_filtered['prix_m2'].mean()
-    if pd.notna(prix_m2):
-        st.metric("Prix moyen / m²", f"{prix_m2:,.0f} €")
 
-# Classement communes
+col1, col2, col3, col4, col5 = st.columns(5)
+
+with col1:
+    st.metric("Communes", f"{df_filtered['nom_commune'].nunique()}")
+
+with col2:
+    st.metric("Transactions", f"{len(df_filtered):,}")
+
+with col3:
+    prix_m2_moyen = df_filtered['prix_m2'].mean()
+    if pd.notna(prix_m2_moyen):
+        st.metric("Prix moyen / m²", f"{prix_m2_moyen:,.0f} €")
+    else:
+        st.metric("Prix moyen / m²", "N/A")
+
+with col4:
+    st.metric("Prix médian", f"{df_filtered['valeur_fonciere'].median():,.0f} €")
+
+with col5:
+    surface_non_zero = df_filtered[df_filtered['surface_reelle_bati'] > 0]
+    if not surface_non_zero.empty:
+        st.metric("Surface moyenne (bâti)", f"{surface_non_zero['surface_reelle_bati'].mean():.0f} m²")
+    else:
+        st.metric("Surface moyenne", "N/A")
+
+# Top communes par nombre de transactions
 st.subheader("🏆 Classement des communes")
-stats = df_filtered.groupby('nom_commune').agg({
-    'valeur_fonciere': ['count', 'median'],
+
+stats_communes = df_filtered.groupby('nom_commune').agg({
+    'valeur_fonciere': ['count', 'mean', 'median'],
     'prix_m2': 'mean'
 }).round(0)
-stats.columns = ['Transactions', 'Prix médian', 'Prix m² moyen']
-stats = stats.sort_values('Transactions', ascending=False).reset_index()
-stats['Prix médian'] = stats['Prix médian'].apply(lambda x: f"{x:,.0f} €")
-stats['Prix m² moyen'] = stats['Prix m² moyen'].apply(lambda x: f"{x:,.0f} €" if pd.notna(x) else "N/A")
-st.dataframe(stats, use_container_width=True, hide_index=True)
 
-# Carte de l'île (agrégée par commune)
-st.subheader("🗺️ Carte des transactions par commune")
+stats_communes.columns = ['Transactions', 'Prix moyen', 'Prix médian', 'Prix m² moyen']
+stats_communes = stats_communes.sort_values('Transactions', ascending=False).reset_index()
 
-# Agrégation par commune pour la carte
-commune_stats = df_filtered.groupby('nom_commune').agg({
-    'valeur_fonciere': ['count', 'median'],
-    'latitude': 'first',
-    'longitude': 'first'
-}).round(0)
-commune_stats.columns = ['nb_transactions', 'prix_median', 'latitude', 'longitude']
-commune_stats = commune_stats.dropna(subset=['latitude', 'longitude']).reset_index()
+stats_communes['Prix moyen'] = stats_communes['Prix moyen'].apply(lambda x: f"{x:,.0f} €")
+stats_communes['Prix médian'] = stats_communes['Prix médian'].apply(lambda x: f"{x:,.0f} €")
+stats_communes['Prix m² moyen'] = stats_communes['Prix m² moyen'].apply(
+    lambda x: f"{x:,.0f} €" if pd.notna(x) else "N/A"
+)
 
-if not commune_stats.empty:
-    fig = px.scatter_mapbox(
-        commune_stats,
-        lat="latitude",
-        lon="longitude",
-        size="nb_transactions",
-        color="prix_median",
-        hover_name="nom_commune",
-        hover_data={
-            "nb_transactions": True,
-            "prix_median": ":.0f"
-        },
-        color_continuous_scale="Viridis",
-        size_max=25,
-        zoom=8,
-        mapbox_style="open-street-map",
-        title=f"Transactions par commune - {'Toutes années' if selected_annee == 'Toutes' else selected_annee}"
-    )
-    fig.update_layout(height=600)
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.warning("Impossible d'afficher la carte")
+st.dataframe(stats_communes, use_container_width=True, hide_index=True)
 
-# Top communes graphiques
+# Graphiques
 col1, col2 = st.columns(2)
+
 with col1:
-    fig = px.bar(stats.head(10), x='nom_commune', y='Transactions', 
-                 title="Top 10 communes les plus actives")
+    fig = px.bar(stats_communes.head(10), x='nom_commune', y='Transactions',
+                 title="Top 10 communes les plus actives",
+                 color='Prix m² moyen', color_continuous_scale='Viridis')
     st.plotly_chart(fig, use_container_width=True)
+
 with col2:
-    top_prix = df_filtered.dropna(subset=['prix_m2']).groupby('nom_commune')['prix_m2'].mean().round(0).sort_values(ascending=False).head(10)
-    if not top_prix.empty:
-        fig = px.bar(x=top_prix.values, y=top_prix.index, orientation='h',
-                     title="Top 10 communes les plus chères (m²)")
+    # Top prix m² (uniquement si non nul)
+    df_prix = df_filtered.dropna(subset=['prix_m2'])
+    if not df_prix.empty:
+        top_prix = df_prix.groupby('nom_commune')['prix_m2'].mean().round(0).sort_values(ascending=False).head(10).reset_index()
+        fig = px.bar(top_prix, x='nom_commune', y='prix_m2',
+                     title="Top 10 communes les plus chères au m²",
+                     color='prix_m2', color_continuous_scale='RdYlGn_r')
         st.plotly_chart(fig, use_container_width=True)
 
 # Sélection commune
 st.sidebar.header("📍 Commune")
-communes_list = sorted(df_filtered['nom_commune'].unique())
-selected_commune = st.sidebar.selectbox("Choisissez une commune", communes_list)
+communes_disponibles = sorted(df_filtered['nom_commune'].unique())
+selected_commune = st.sidebar.selectbox("Choisissez une commune", communes_disponibles)
 
 df_commune = df_filtered[df_filtered['nom_commune'] == selected_commune]
 
 if not df_commune.empty:
     st.header(f"📊 {selected_commune}")
     
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
         st.metric("Transactions", f"{len(df_commune):,}")
-    with col2:
+    with k2:
         st.metric("Prix médian", f"{df_commune['valeur_fonciere'].median():,.0f} €")
-    with col3:
+    with k3:
         prix_m2 = df_commune['prix_m2'].mean()
         if pd.notna(prix_m2):
             st.metric("Prix moyen / m²", f"{prix_m2:,.0f} €")
-    with col4:
-        surface = df_commune[df_commune['surface_reelle_bati'] > 0]['surface_reelle_bati'].mean()
-        if pd.notna(surface):
-            st.metric("Surface moyenne", f"{surface:.0f} m²")
+        else:
+            st.metric("Prix moyen / m²", "N/A")
+    with k4:
+        surface_non_zero = df_commune[df_commune['surface_reelle_bati'] > 0]
+        if not surface_non_zero.empty:
+            st.metric("Surface moyenne", f"{surface_non_zero['surface_reelle_bati'].mean():.0f} m²")
     
-    # Graphiques commune
+    # Distribution des prix
     col1, col2 = st.columns(2)
+    
     with col1:
         fig = px.histogram(df_commune, x='valeur_fonciere', nbins=30,
                            title=f"Distribution des prix - {selected_commune}",
-                           log_x=True)
+                           log_x=True, log_y=True)
         st.plotly_chart(fig, use_container_width=True)
+    
     with col2:
-        types = df_commune['type_local'].value_counts().head(8)
-        fig = px.pie(values=types.values, names=types.index,
+        # Types de biens dans cette commune
+        types_commune = df_commune['type_local'].value_counts().head(8)
+        fig = px.pie(values=types_commune.values, names=types_commune.index,
                      title=f"Types de biens - {selected_commune}")
         st.plotly_chart(fig, use_container_width=True)
     
-    # Évolution
-    annuel = df_commune.groupby('annee').agg({
+    # Évolution temporelle
+    df_commune_annuel = df_commune.groupby('annee').agg({
         'valeur_fonciere': ['count', 'median']
     }).round(0)
-    annuel.columns = ['nb', 'prix_median']
-    annuel = annuel.reset_index().dropna()
+    df_commune_annuel.columns = ['nb_transactions', 'prix_median']
+    df_commune_annuel = df_commune_annuel.reset_index()
     
-    if len(annuel) > 1:
+    if len(df_commune_annuel) > 1:
         col1, col2 = st.columns(2)
         with col1:
-            fig = px.line(annuel, x='annee', y='nb', markers=True,
-                          title=f"Transactions par année - {selected_commune}")
+            fig = px.line(df_commune_annuel, x='annee', y='nb_transactions',
+                          title=f"Nombre de transactions - {selected_commune}",
+                          markers=True)
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            fig = px.line(annuel, x='annee', y='prix_median', markers=True,
-                          title=f"Prix médian par année - {selected_commune}")
+            fig = px.line(df_commune_annuel, x='annee', y='prix_median',
+                          title=f"Prix médian - {selected_commune}",
+                          markers=True)
             st.plotly_chart(fig, use_container_width=True)
+
+# Carte
+if 'latitude' in df_filtered.columns and 'longitude' in df_filtered.columns:
+    df_carte = df_filtered.dropna(subset=['latitude', 'longitude'])
+    if not df_carte.empty:
+        st.subheader("🗺️ Carte des transactions")
+        
+        echantillon = df_carte.sample(min(500, len(df_carte)))
+        
+        fig = px.scatter_mapbox(
+            echantillon,
+            lat="latitude", lon="longitude",
+            color="valeur_fonciere", size="valeur_fonciere",
+            hover_name="nom_commune",
+            hover_data={"valeur_fonciere": ":.0f", "type_local": True},
+            color_continuous_scale="RdYlGn_r",
+            zoom=8, mapbox_style="open-street-map"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 # Pied de page
 st.markdown("---")
