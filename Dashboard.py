@@ -23,6 +23,58 @@ COMMUNES_REUNION = {
     "97422": "Salazie", "97423": "Le Tampon", "97424": "Les Trois-Bassins"
 }
 
+# Coordonnées approximatives des communes (centres) pour fallback
+COMMUNES_COORDS = {
+    "Saint-Denis": (20.8823, 55.4504),
+    "Saint-Pierre": (21.3419, 55.4778),
+    "Saint-Paul": (21.0096, 55.2696),
+    "Saint-Louis": (21.2862, 55.4095),
+    "Saint-André": (20.9601, 55.6502),
+    "Saint-Benoît": (21.0342, 55.7121),
+    "Saint-Joseph": (21.3782, 55.6194),
+    "Saint-Leu": (21.1674, 55.2861),
+    "Sainte-Marie": (20.8969, 55.5493),
+    "Sainte-Suzanne": (20.9064, 55.6075),
+    "Le Tampon": (21.2800, 55.5200),
+    "Les Avirons": (21.2425, 55.3394),
+    "Bras-Panon": (20.9953, 55.6778),
+    "Cilaos": (21.1347, 55.4661),
+    "Entre-Deux": (21.2464, 55.4706),
+    "L'Étang-Salé": (21.2633, 55.3644),
+    "Petite-Île": (21.3531, 55.5644),
+    "La Plaine-des-Palmistes": (21.1356, 55.6250),
+    "Le Port": (20.9389, 55.2903),
+    "La Possession": (20.9300, 55.3350),
+    "Saint-Philippe": (21.3594, 55.7678),
+    "Sainte-Rose": (21.1289, 55.7933),
+    "Salazie": (21.0275, 55.5386),
+    "Les Trois-Bassins": (21.1150, 55.2900),
+}
+
+def convert_utm_to_wgs84(x, y):
+    """Convertit approximativement les coordonnées UTM (RGF93) en WGS84 pour La Réunion"""
+    # Ces valeurs sont approximatives - La Réunion est en zone UTM 40S
+    # Facteurs simplifiés pour la conversion
+    if pd.isna(x) or pd.isna(y):
+        return None, None
+    
+    try:
+        x_f = float(x)
+        y_f = float(y)
+        
+        # Conversion approximative pour La Réunion
+        # Centre approximatif de l'île
+        lon_center = 55.5
+        lat_center = -21.1
+        
+        # Facteurs de conversion (approximatifs)
+        lon = lon_center + (x_f - 350000) / 111000
+        lat = lat_center + (y_f - 7638000) / 111000
+        
+        return lat, lon
+    except:
+        return None, None
+
 @st.cache_data(ttl=3600)
 def load_data():
     """Charge les données depuis GitHub Releases"""
@@ -49,47 +101,51 @@ def prepare_data(df):
     # Valeur foncière
     df_clean['valeur_fonciere'] = pd.to_numeric(df_clean['valeurfonc'], errors='coerce')
     
-    # Surface bâtie (sbati) - pour les terrains, garder même à 0
+    # Surface bâtie
     df_clean['surface_reelle_bati'] = pd.to_numeric(df_clean['sbati'], errors='coerce')
     
-    # Pour les terrains sans bâtiment, on utilise une surface par défaut ou on garde 0
-    # On ne filtre PAS les surfaces à 0
-    
-    # Type de bien - garder TOUS les types
+    # Type de bien
     df_clean['type_local'] = df_clean['libtypbien']
     
     # Code commune et nom
     df_clean['code_commune'] = df_clean['l_codinsee'].astype(str).str.zfill(5)
     df_clean['nom_commune'] = df_clean['code_commune'].map(COMMUNES_REUNION)
     
-    # Coordonnées
-    df_clean['longitude'] = pd.to_numeric(df_clean['geompar_x'], errors='coerce')
-    df_clean['latitude'] = pd.to_numeric(df_clean['geompar_y'], errors='coerce')
+    # Conversion des coordonnées UTM -> WGS84
+    df_clean['raw_x'] = pd.to_numeric(df_clean['geompar_x'], errors='coerce')
+    df_clean['raw_y'] = pd.to_numeric(df_clean['geompar_y'], errors='coerce')
+    
+    # Appliquer la conversion
+    coords = df_clean.apply(
+        lambda row: convert_utm_to_wgs84(row['raw_x'], row['raw_y']), 
+        axis=1
+    )
+    df_clean['latitude'] = coords.apply(lambda x: x[0] if x else None)
+    df_clean['longitude'] = coords.apply(lambda x: x[1] if x else None)
+    
+    # Fallback: utiliser coordonnées communes pour ceux sans géoloc
+    for commune, (lat, lon) in COMMUNES_COORDS.items():
+        mask = (df_clean['nom_commune'] == commune) & (df_clean['latitude'].isna())
+        df_clean.loc[mask, 'latitude'] = lat
+        df_clean.loc[mask, 'longitude'] = lon
     
     # Code postal
     df_clean['code_postal'] = df_clean['codservch'].astype(str).str[:5]
     
-    # Supprimer les valeurs manquantes critiques (seulement la valeur foncière)
+    # Supprimer les valeurs manquantes critiques
     df_clean = df_clean.dropna(subset=['valeur_fonciere', 'nom_commune'])
     
-    # Filtrage des valeurs aberrantes (plus souple)
-    df_clean = df_clean[df_clean['valeur_fonciere'] > 5000]   # Min 5k€ (inclut petits terrains)
-    df_clean = df_clean[df_clean['valeur_fonciere'] < 5000000]  # Max 5M€
+    # Filtrage des valeurs aberrantes
+    df_clean = df_clean[df_clean['valeur_fonciere'] > 5000]
+    df_clean = df_clean[df_clean['valeur_fonciere'] < 5000000]
     
-    # Pour les biens avec surface > 0, calculer prix m²
-    # Pour les terrains, on ne calcule pas le prix m² (laisser NaN)
+    # Prix au m² (uniquement pour surface > 0)
     mask_surface_valide = (df_clean['surface_reelle_bati'] > 9) & (df_clean['surface_reelle_bati'] < 10000)
     df_clean['prix_m2'] = np.nan
     df_clean.loc[mask_surface_valide, 'prix_m2'] = (
         df_clean.loc[mask_surface_valide, 'valeur_fonciere'] / 
         df_clean.loc[mask_surface_valide, 'surface_reelle_bati']
     )
-    
-    # Filtrer prix m² aberrants (uniquement pour ceux qui ont une surface)
-    if 'prix_m2' in df_clean.columns:
-        mask_prix_valide = (df_clean['prix_m2'] >= 100) & (df_clean['prix_m2'] <= 15000)
-        mask_prix_valide = mask_prix_valide | (df_clean['prix_m2'].isna())
-        df_clean = df_clean[mask_prix_valide]
     
     return df_clean
 
@@ -102,35 +158,12 @@ df_raw = load_data()
 if df_raw.empty:
     st.stop()
 
-# Afficher les statistiques des types de biens avant nettoyage
-with st.expander("📊 Types de biens dans les données brutes"):
-    types_counts = df_raw['libtypbien'].value_counts()
-    st.dataframe(types_counts.reset_index().head(20))
-
 # Nettoyage
 with st.spinner("🧹 Nettoyage des données..."):
     df = prepare_data(df_raw)
 
 if df.empty:
     st.error("❌ Aucune transaction valide après nettoyage")
-    
-    # Diagnostic détaillé
-    with st.expander("🔍 Diagnostic avancé"):
-        st.write("**Types de biens uniques:**", df_raw['libtypbien'].unique())
-        st.write("**Valeurs foncières - min/max:**", df_raw['valeurfonc'].min(), df_raw['valeurfonc'].max())
-        st.write("**Surfaces (sbati) - distribution:**")
-        st.write(df_raw['sbati'].describe())
-        
-        # Vérifier les valeurs après conversion
-        test_df = df_raw.copy()
-        test_df['valeur_fonciere'] = pd.to_numeric(test_df['valeurfonc'], errors='coerce')
-        test_df = test_df.dropna(subset=['valeur_fonciere', 'l_codinsee'])
-        test_df = test_df[test_df['valeur_fonciere'] > 5000]
-        
-        st.write(f"**Après filtrage basique:** {len(test_df)} transactions")
-        st.write("**Exemple de transactions valides:**")
-        st.dataframe(test_df[['valeurfonc', 'sbati', 'libtypbien', 'l_codinsee']].head(10))
-    
     st.stop()
 
 # Succès
@@ -139,13 +172,20 @@ types_dispo = df['type_local'].value_counts()
 
 st.success(f"✅ {len(df):,} transactions valides ({min(annees_dispo)} - {max(annees_dispo)})")
 
+# Vérifier les coordonnées
+coord_count = df['latitude'].notna().sum()
+if coord_count > 0:
+    st.info(f"📍 {coord_count:,} transactions géolocalisées sur {len(df):,}")
+else:
+    st.warning("⚠️ Aucune donnée de géolocalisation disponible - les cartes ne s'afficheront pas")
+
 # Sidebar - Filtres
 st.sidebar.header("📅 Filtres")
 
 # Filtre année
 selected_annee = st.sidebar.selectbox(
     "Année",
-    options=['Toutes'] + [int(a) for a in annees_dispo if a <= 2026],
+    options=['Toutes'] + [int(a) for a in annees_dispo if a <= 2026 and pd.notna(a)],
     index=0
 )
 
@@ -176,6 +216,10 @@ df_filtered = df_filtered[
     (df_filtered['valeur_fonciere'] <= prix_range[1])
 ]
 
+if df_filtered.empty:
+    st.warning("Aucune transaction avec ces filtres")
+    st.stop()
+
 # Statistiques globales
 st.header("📊 Vue d'ensemble")
 
@@ -201,10 +245,8 @@ with col5:
     surface_non_zero = df_filtered[df_filtered['surface_reelle_bati'] > 0]
     if not surface_non_zero.empty:
         st.metric("Surface moyenne (bâti)", f"{surface_non_zero['surface_reelle_bati'].mean():.0f} m²")
-    else:
-        st.metric("Surface moyenne", "N/A")
 
-# Top communes par nombre de transactions
+# Top communes
 st.subheader("🏆 Classement des communes")
 
 stats_communes = df_filtered.groupby('nom_commune').agg({
@@ -229,11 +271,10 @@ col1, col2 = st.columns(2)
 with col1:
     fig = px.bar(stats_communes.head(10), x='nom_commune', y='Transactions',
                  title="Top 10 communes les plus actives",
-                 color='Prix m² moyen', color_continuous_scale='Viridis')
+                 color='Prix moyen', color_continuous_scale='Viridis')
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    # Top prix m² (uniquement si non nul)
     df_prix = df_filtered.dropna(subset=['prix_m2'])
     if not df_prix.empty:
         top_prix = df_prix.groupby('nom_commune')['prix_m2'].mean().round(0).sort_values(ascending=False).head(10).reset_index()
@@ -241,6 +282,51 @@ with col2:
                      title="Top 10 communes les plus chères au m²",
                      color='prix_m2', color_continuous_scale='RdYlGn_r')
         st.plotly_chart(fig, use_container_width=True)
+
+# Carte des transactions (si coordonnées disponibles)
+st.subheader("🗺️ Carte des transactions")
+
+df_carte = df_filtered.dropna(subset=['latitude', 'longitude'])
+
+if not df_carte.empty:
+    # Échantillonnage pour performance
+    if len(df_carte) > 1000:
+        df_carte = df_carte.sample(1000, random_state=42)
+        st.caption(f"Affichage de 1000 transactions sur {len(df_filtered)} (échantillon)")
+    
+    fig = px.scatter_mapbox(
+        df_carte,
+        lat="latitude",
+        lon="longitude",
+        color="valeur_fonciere",
+        size="valeur_fonciere",
+        hover_name="nom_commune",
+        hover_data={
+            "valeur_fonciere": ":.0f",
+            "type_local": True,
+            "annee": True,
+            "surface_reelle_bati": ":.0f"
+        },
+        color_continuous_scale="Viridis",
+        size_max=15,
+        zoom=9,
+        mapbox_style="open-street-map",
+        title=f"Transactions immobilières à La Réunion ({selected_annee if selected_annee != 'Toutes' else 'toutes années'})"
+    )
+    fig.update_layout(height=600)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.warning("📍 Aucune donnée de géolocalisation disponible pour afficher la carte")
+    
+    # Afficher un graphique alternatif
+    st.subheader("📊 Répartition géographique alternative")
+    transactions_par_commune = df_filtered['nom_commune'].value_counts().head(15)
+    fig = px.bar(x=transactions_par_commune.values, 
+                 y=transactions_par_commune.index,
+                 orientation='h',
+                 title="Nombre de transactions par commune",
+                 labels={'x': 'Nombre de transactions', 'y': 'Commune'})
+    st.plotly_chart(fig, use_container_width=True)
 
 # Sélection commune
 st.sidebar.header("📍 Commune")
@@ -274,11 +360,10 @@ if not df_commune.empty:
     with col1:
         fig = px.histogram(df_commune, x='valeur_fonciere', nbins=30,
                            title=f"Distribution des prix - {selected_commune}",
-                           log_x=True, log_y=True)
+                           log_x=True)
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        # Types de biens dans cette commune
         types_commune = df_commune['type_local'].value_counts().head(8)
         fig = px.pie(values=types_commune.values, names=types_commune.index,
                      title=f"Types de biens - {selected_commune}")
@@ -290,6 +375,7 @@ if not df_commune.empty:
     }).round(0)
     df_commune_annuel.columns = ['nb_transactions', 'prix_median']
     df_commune_annuel = df_commune_annuel.reset_index()
+    df_commune_annuel = df_commune_annuel.dropna()
     
     if len(df_commune_annuel) > 1:
         col1, col2 = st.columns(2)
@@ -303,24 +389,24 @@ if not df_commune.empty:
                           title=f"Prix médian - {selected_commune}",
                           markers=True)
             st.plotly_chart(fig, use_container_width=True)
-
-# Carte
-if 'latitude' in df_filtered.columns and 'longitude' in df_filtered.columns:
-    df_carte = df_filtered.dropna(subset=['latitude', 'longitude'])
-    if not df_carte.empty:
-        st.subheader("🗺️ Carte des transactions")
-        
-        echantillon = df_carte.sample(min(500, len(df_carte)))
+    
+    # Carte pour la commune
+    df_commune_carte = df_commune.dropna(subset=['latitude', 'longitude'])
+    if not df_commune_carte.empty:
+        st.subheader(f"🗺️ Carte - {selected_commune}")
         
         fig = px.scatter_mapbox(
-            echantillon,
-            lat="latitude", lon="longitude",
-            color="valeur_fonciere", size="valeur_fonciere",
-            hover_name="nom_commune",
-            hover_data={"valeur_fonciere": ":.0f", "type_local": True},
-            color_continuous_scale="RdYlGn_r",
-            zoom=8, mapbox_style="open-street-map"
+            df_commune_carte,
+            lat="latitude",
+            lon="longitude",
+            color="valeur_fonciere",
+            size="valeur_fonciere",
+            hover_data={"type_local": True, "valeur_fonciere": ":.0f"},
+            color_continuous_scale="Viridis",
+            zoom=12,
+            mapbox_style="open-street-map"
         )
+        fig.update_layout(height=500)
         st.plotly_chart(fig, use_container_width=True)
 
 # Pied de page
